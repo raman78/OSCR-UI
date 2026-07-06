@@ -8,14 +8,6 @@ def _empty_error_handler(error: BaseException):
     return
 
 
-# class ServerError(IOError):
-#     """The request was unsuccessful in retrieving data from the server"""
-
-#     def __init__(self, error_message: str, status_code: str, status_text: str):
-#         self.args = {'status_code': status_code, 'details': status_text}
-#         super().__init__(error_message)
-
-
 class Ladder():
     """Represents a ladder of the league"""
 
