@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from OSCR_django_client import CombatLogUploadV2Response
 from OSCR import DetectionInfo
 
+from .apiclient import UploadResult
 from .iofunctions import open_link
 from .theme import AppTheme
 from .translation import tr
@@ -180,7 +181,7 @@ class UploadresultDialog(QDialog):
         if self._log_id != -1:
             open_link(f"https://oscr.stobuilds.com/ui/combatlog/{self._log_id}/")
 
-    def show_dialog(self, result: CombatLogUploadV2Response):
+    def show_dialog(self, result: UploadResult):
         """
         Shows a dialog that informs about the result of the triggered upload.
 
@@ -189,18 +190,18 @@ class UploadresultDialog(QDialog):
         """
         QWidget().setLayout(self._result_frame.layout())
         self._title_label.setText(result.detail)
-        if result.combatlog is None:
+        if result.combatlog_id is None:
             self._view_button.hide()
         else:
-            self._log_id = result.combatlog
+            self._log_id = result.combatlog_id
             self._view_button.show()
         result_layout = QGridLayout()
         result_layout.setContentsMargins(0, 0, 0, 0)
         result_layout.setSpacing(0)
         icon_size = QSize(self._theme.opt.icon_size / 1.5, self._theme.opt.icon_size / 1.5)
         row = 0
-        if result.results:
-            for row, line in enumerate(result.results, 1):
+        if result.entries:
+            for row, line in enumerate(result.entries, 1):
                 if row % 2 == 1:
                     table_style = {'background-color': '@mbg', 'padding': (5, 3, 3, 3), 'margin': 0}
                     icon_table_style = {'background-color': '@mbg', 'padding': 3, 'margin': 0}

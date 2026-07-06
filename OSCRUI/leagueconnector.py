@@ -6,13 +6,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile as TempFile
 from typing import Callable
 
-from OSCR_django_client import (
-    ApiClient, CombatlogApi, CombatLogUploadV2Response, Ladder, LadderApi, LadderEntriesApi,
-    Variant, VariantApi)
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QListWidgetItem
 
+from .apiclient import Ladder, OSCRApiClient, UploadResult
 from .config import OSCRConfig
 from .datamodels import LeagueTableModel, SortingProxy
 from .dialogs import DialogsWrapper, UploadresultDialog
@@ -23,10 +21,10 @@ from .translation import tr
 from .widgetmanager import WidgetManager
 
 LEAGUE_TABLE_HEADER = [
-        'Name', 'Handle', 'DPS', 'Total Damage', 'Deaths', 'Combat Time', 'Date', 'Max One Hit',
-        'Debuff', 'Highest Damage Ability']
+    'Name', 'Handle', 'DPS', 'Total Damage', 'Deaths', 'Combat Time', 'Date', 'Max One Hit',
+    'Debuff', 'Highest Damage Ability']
 
-OSCR_SERVER_BACKEND = "https://oscr.stobuilds.com/"
+OSCR_SERVER_BACKEND = "https://oscr.stobuilds.com"
 # OSCR_SERVER_BACKEND = "http://127.0.0.1:8000"
 
 
@@ -77,11 +75,8 @@ class OSCRLeagueConnector(QObject):
         self._config: OSCRConfig = config
         self._parser: ParserBridge = parser
         self._upload_dialog: UploadresultDialog = upload_dialog
-        self._api: ApiClient | None = None
-        self._api_variant: VariantApi
-        self._api_ladder: LadderApi
-        self._api_ladder_entries: LadderEntriesApi
-        self._api_combatlog: CombatlogApi
+        self._api: OSCRApiClient = OSCRApiClient(
+            OSCR_SERVER_BACKEND, self._config.templog_folder_path, self.handle_fetch_error)
         self._thread: FetchThread | None = None
         self.ladder_meta: dict[str, Ladder] = dict()
         self.current_ladder_id: int | None = None
@@ -91,23 +86,6 @@ class OSCRLeagueConnector(QObject):
         self.ladder_table_model: LeagueTableModel = LeagueTableModel(LEAGUE_TABLE_HEADER)
         self.ladder_table_sort: SortingProxy = SortingProxy()
         self.ladder_table_sort.setSourceModel(self.ladder_table_model)
-
-    def establish_league_connection(self, fetch_seasons: bool = True):
-        """
-        Connects to the league server if not already connected.
-
-        Parameters:
-        - :param fetch_seasons: fetches available maps and updates map selector if true
-        """
-        if self._api is None:
-            self._api = ApiClient()
-            self._api.configuration.host = OSCR_SERVER_BACKEND
-            self._api_variant = VariantApi(api_client=self._api)
-            self._api_ladder = LadderApi(api_client=self._api)
-            self._api_ladder_entries = LadderEntriesApi(api_client=self._api)
-            self._api_combatlog = CombatlogApi(api_client=self._api)
-        if self._api is not None and fetch_seasons:
-            self.fetch_and_insert_maps()
 
     def handle_fetch_error(self, error: BaseException):
         """
@@ -122,7 +100,7 @@ class OSCRLeagueConnector(QObject):
             error_details = f'{error_args}\n\n'
         error_reason = getattr(error, 'reason', None)
         if error_reason is not None:
-            error_details += f'{error_args}\n\n'
+            error_details += f'{error_reason}\n\n'
         error_body = getattr(error, 'body', None)
         if isinstance(error_body, str):
             try:
@@ -149,32 +127,26 @@ class OSCRLeagueConnector(QObject):
         """
         Retrieves maps from API and inserts them into the list.
         """
-        variants = self.variants(ordering="-start_date")
+        variants = self._api.variants(ordering='-start_date')
         if variants is not None:
             for variant in variants:
-                self._widgets.variant_combo.addItem(variant.name)
-                if variant.name == 'Default':
+                self._widgets.variant_combo.addItem(variant)
+                if variant == 'Default':
                     self._widgets.variant_combo.setCurrentText('Default')
             self.status_message.emit(tr('Seasons fetched'), '')
 
-    def upload(self, combat: tuple[str, int, int]) -> CombatLogUploadV2Response | None:
+    def upload(self, combat: tuple[str, int, int]) -> UploadResult | None:
         """
         Upload a combat log located at path to the league tables
 
         Parameters:
         - :param combat: contains path to log file, start and end position of combat in log file
         """
-        try:
-            with (TempFile(dir=str(self._config.templog_folder_path), delete=False) as temp,
-                    open(combat[0], 'rb') as log_file):
-                log_file.seek(combat[1])
-                temp.write(gzip__compress(
-                    log_file.read(combat[2] - combat[1])))
-                temp.flush()
-            response = self._api_combatlog.combatlog_uploadv2(file=temp.name)
-            return response
-        except BaseException as e:
-            self.handle_fetch_error(e)
+        with open(combat[0], 'rb') as log_file:
+            log_file.seek(combat[1])
+            combatlog_data = gzip__compress(log_file.read(combat[2] - combat[1]))
+        response = self._api.upload_combatlog(combatlog_data)
+        return response
 
     def download(self, id: int) -> Path | None:
         """
@@ -183,15 +155,12 @@ class OSCRLeagueConnector(QObject):
         Parameters:
         - :param id: id of the combatlog to download
         """
-        try:
-            result = self._api_combatlog.combatlog_download(id=id)
-            if result is None:
-                return
-            with TempFile(mode="wb", dir=str(self._config.templog_folder_path), delete=False) as f:
-                f.write(gzip__decompress(result))
-            return Path(f.name)
-        except BaseException as e:
-            self.handle_fetch_error(e)
+        result = self._api.download_combatlog(id)
+        if result is None:
+            return
+        with TempFile(mode='wb', dir=str(self._config.templog_folder_path), delete=False) as f:
+            f.write(gzip__decompress(result))
+        return Path(f.name)
 
     def ladder_entries(
             self, id: int, page: int = 1,
@@ -206,63 +175,49 @@ class OSCRLeagueConnector(QObject):
         - :param page: number of the page to fetch with each page containing 50 entries
         - :param player_filter: search string for filtering player name
         """
-        try:
-            ladder_response = self._api_ladder_entries.ladder_entries_list(
-                ladder=str(id), page=page, ordering="-data__DPS", page_size=50,
-                player__icontains=player_filter)
-            table_index = list()
-            table_data = list()
-            logfile_ids = list()
-            for entry in ladder_response.results:
-                logfile_ids.append(entry.combatlog)
-                row = entry.data
-                table_index.append(entry.ladder_rank)
-                table_data.append((
-                    row['name'], row['handle'], row['DPS'], row['total_damage'], row['deaths'],
-                    row['combat_time'], format_datetime_str(entry.var_date), row['max_one_hit'],
-                    row['debuff'], row.get('build', 'Unknown')))
-            return table_index, table_data, logfile_ids
-        except BaseException as e:
-            self.handle_fetch_error(e)
+        entries = self._api.ladder_entries(
+            ladder_id=id, ordering='-data__DPS', page_size=50, page=page,
+            player_filter=player_filter)
+        if entries is None:
+            return None
+        table_index = list()
+        table_data = list()
+        logfile_ids = list()
+        for entry in entries:
+            logfile_ids.append(entry.combatlog_id)
+            row = entry.data
+            table_index.append(entry.rank)
+            table_data.append((
+                row['name'], row['handle'], row['DPS'], row['total_damage'], row['deaths'],
+                row['combat_time'], format_datetime_str(entry.combat_date), row['max_one_hit'],
+                row['debuff'], row.get('build', 'Unknown')))
+        return table_index, table_data, logfile_ids
 
-    def ladders(self, **kwargs) -> list[QListWidgetItem] | None:
+    def ladders(self, season: str) -> list[QListWidgetItem] | None:
         """
         Fetch ladders from server and create ladder list. Returns `None` if ladders could not be
         retrieved.
 
         Parameters:
-        - same as `LadderApi.ladder_list`
+        - :param season: name of the season (=variant)
         """
-        try:
-            ladders = self._api_ladder.ladder_list(**kwargs).results
-            ladder_list = list()
-            for ladder in ladders:
-                solo = ' [Solo]' if ladder.is_solo else ''
-                key = f'{ladder.name}{solo}|{ladder.difficulty}'
-                text = f'{ladder.name}{solo}'
-                self.ladder_meta[key] = ladder
-                item = QListWidgetItem(text)
-                item.difficulty = ladder.difficulty
-                if ladder.difficulty != 'Any' and ladder.difficulty is not None:
-                    icon = self._theme.icons[f'TFO-{ladder.difficulty.lower()}']
-                    icon.addPixmap(icon.pixmap(18, 24), QIcon.Mode.Selected)
-                    item.setIcon(icon)
-                ladder_list.append(item)
-            return ladder_list
-        except BaseException as e:
-            self.handle_fetch_error(e)
-
-    def variants(self, **kwargs) -> list[Variant] | None:
-        """
-        Fetch variants from server. Returns `None` if variants could not be retrieved.
-
-        Parameters:
-        - same as `VariantApi.variant_list`
-        """
-        try:
-            return self._api_variant.variant_list(**kwargs).results
-        except BaseException as e:
-            self.handle_fetch_error(e)
+        ladders = self._api.ladders(season)
+        if ladders is None:
+            return None
+        ladder_list = list()
+        for ladder in ladders:
+            solo = ' [Solo]' if ladder.is_solo else ''
+            key = f'{ladder.name}{solo}|{ladder.difficulty}'
+            text = f'{ladder.name}{solo}'
+            self.ladder_meta[key] = ladder
+            item = QListWidgetItem(text)
+            item.difficulty = ladder.difficulty
+            if ladder.difficulty != 'Any' and ladder.difficulty is not None:
+                icon = self._theme.icons[f'TFO-{ladder.difficulty.lower()}']
+                icon.addPixmap(icon.pixmap(18, 24), QIcon.Mode.Selected)
+                item.setIcon(icon)
+            ladder_list.append(item)
+        return ladder_list
 
     def update_seasonal_records(self, new_season: str):
         """
@@ -273,7 +228,7 @@ class OSCRLeagueConnector(QObject):
         """
         if self._thread is not None and not self._thread.isRunning():
             self._thread = FetchThread(
-                self.ladders, kwargs={'variant': new_season},
+                self.ladders, kwargs={'season': new_season},
                 callback=self._insert_seasonal_records)
             self._thread.start()
             self.status_message.emit(
@@ -407,7 +362,6 @@ class OSCRLeagueConnector(QObject):
             current_combat = self._parser.current_combat
         except IndexError:
             return
-        self.establish_league_connection(fetch_seasons=False)
         if self._thread is not None and self._thread.isRunning():
             self.status_message.emit(
                 tr('League busy'), tr('Please wait for the last league request to finish.'))
@@ -417,7 +371,7 @@ class OSCRLeagueConnector(QObject):
         self._thread.start()
         self.status_message.emit(tr('Uploading log file'), '')
 
-    def _handle_upload(self, response: CombatLogUploadV2Response | None):
+    def _handle_upload(self, response: UploadResult | None):
         """
         Informs the user after upload.
 
