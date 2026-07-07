@@ -101,7 +101,7 @@ class OSCRApiClient():
         """
         try:
             response = self._session.get(
-                f'{self.backend_url}/variant', params={'ordering': ordering}, timeout=(3, 20))
+                f'{self.backend_url}/variant', params={'ordering': ordering}, timeout=(3, 60))
             response.raise_for_status()
             response_data = response.json()
         except BaseException as e:
@@ -118,7 +118,7 @@ class OSCRApiClient():
         """
         try:
             response = self._session.get(
-                f'{self.backend_url}/ladder', params={'variant': season}, timeout=(3, 20))
+                f'{self.backend_url}/ladder', params={'variant': season}, timeout=(3, 60))
             response.raise_for_status()
             response_data = response.json()
         except BaseException as e:
@@ -153,7 +153,7 @@ class OSCRApiClient():
                 'player__icontains': player_filter
             }
             response = self._session.get(
-                f'{self.backend_url}/ladder-entries', params=query_parameters, timeout=(3, 20))
+                f'{self.backend_url}/ladder-entries', params=query_parameters, timeout=(3, 60))
             response.raise_for_status()
             response_data = response.json()
         except BaseException as e:

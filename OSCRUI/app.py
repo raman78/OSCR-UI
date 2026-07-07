@@ -85,7 +85,8 @@ class OSCRUI():
         self.parser.parser_status.connect(self.status_bar.parser_status)
         self.parser.status_message.connect(self.status_bar.status_message)
         self.league: OSCRLeagueConnector = OSCRLeagueConnector(
-            self.widgets, self.dialogs, self.theme, self.config, self.parser, self.upload_dialog)
+            self.widgets, self.dialogs, self.theme, self.config, self.settings, self.parser,
+            self.upload_dialog)
         self.league.status_message.connect(self.status_bar.status_message)
         self.sidebar: OSCRLeftSidebar = OSCRLeftSidebar(
             version, self.window, self.parser, self.detection_info, self.dialogs, self.widgets,
@@ -1033,6 +1034,19 @@ class OSCRUI():
         language_combo.currentIndexChanged.connect(
             lambda index: self.settings.set('language', language_codes[index]))
         sec_1.addWidget(language_combo, 18, 1, alignment=ALEFT | AVCENTER)
+
+        league_row_label = create_label(
+            self.theme, tr('Number of league table rows to fetch:'), 'label_subhead')
+        sec_1.addWidget(league_row_label, 19, 0, alignment=ARIGHT)
+        league_row_validator = QIntValidator()
+        league_row_validator.setRange(1, 150)
+        league_row_entry = create_entry(
+            self.theme, str(self.settings.league_table_rows),
+            league_row_validator, style_override={'margin-top': 0})
+        league_row_entry.setSizePolicy(SMIXMAX)
+        league_row_entry.editingFinished.connect(
+            lambda: self.settings.set('league_table_rows', int(league_row_entry.text())))
+        sec_1.addWidget(league_row_entry, 19, 1, alignment=AVCENTER)
         scroll_layout.addLayout(sec_1)
 
         # seperator

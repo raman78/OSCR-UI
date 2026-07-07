@@ -11,7 +11,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QListWidgetItem
 
 from .apiclient import Ladder, OSCRApiClient, UploadResult
-from .config import OSCRConfig
+from .config import OSCRConfig, OSCRSettings
 from .datamodels import LeagueTableModel, SortingProxy
 from .dialogs import DialogsWrapper, UploadresultDialog
 from .parserbridge import ParserBridge
@@ -67,12 +67,14 @@ class OSCRLeagueConnector(QObject):
 
     def __init__(
             self, widgets: WidgetManager, dialogs: DialogsWrapper, theme: AppTheme,
-            config: OSCRConfig, parser: ParserBridge, upload_dialog: UploadresultDialog):
+            config: OSCRConfig, settings: OSCRSettings, parser: ParserBridge,
+            upload_dialog: UploadresultDialog):
         super().__init__()
         self._widgets: WidgetManager = widgets
         self._dialogs: DialogsWrapper = dialogs
         self._theme: AppTheme = theme
         self._config: OSCRConfig = config
+        self._settings: OSCRSettings = settings
         self._parser: ParserBridge = parser
         self._upload_dialog: UploadresultDialog = upload_dialog
         self._api: OSCRApiClient = OSCRApiClient(
@@ -82,6 +84,7 @@ class OSCRLeagueConnector(QObject):
         self.current_ladder_id: int | None = None
         self.entire_ladder_loaded: bool = False
         self.pages_loaded: int = 0
+        self.current_page_size: int = self._settings.league_table_rows
         self.current_filter_term: str = ''
         self.ladder_table_model: LeagueTableModel = LeagueTableModel(LEAGUE_TABLE_HEADER)
         self.ladder_table_sort: SortingProxy = SortingProxy()
@@ -175,8 +178,10 @@ class OSCRLeagueConnector(QObject):
         - :param page: number of the page to fetch with each page containing 50 entries
         - :param player_filter: search string for filtering player name
         """
+        if page == 1:
+            self.current_page_size = self._settings.league_table_rows
         entries = self._api.ladder_entries(
-            ladder_id=id, ordering='-data__DPS', page_size=50, page=page,
+            ladder_id=id, ordering='-data__DPS', page_size=self.current_page_size, page=page,
             player_filter=player_filter)
         if entries is None:
             return None

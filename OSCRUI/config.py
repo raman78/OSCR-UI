@@ -35,12 +35,12 @@ class OSCRSettings():
 
     __slots__ = ('_settings', 'analysis_graph', 'auto_scan', 'combat_min_lines',
                  'combats_to_parse', 'copy_format', 'dmg_columns', 'favorite_ladders',
-                 'first_overview_tab', 'graph_resolution', 'heal_columns', 'language', 'log_path',
-                 'overview_sort_column', 'overview_sort_order', 'seconds_between_combats',
-                 'sto_log_path', 'ui_scale', 'state__analysis_splitter', 'state__geometry',
-                 'state__live_geometry', 'state__live_splitter', 'state__overview_splitter',
-                 'liveparser__auto_enabled', 'liveparser__columns', 'liveparser__copy_kills',
-                 'liveparser__graph_active', 'liveparser__graph_field',
+                 'first_overview_tab', 'graph_resolution', 'heal_columns', 'league_table_rows',
+                 'language', 'log_path', 'overview_sort_column', 'overview_sort_order',
+                 'seconds_between_combats', 'sto_log_path', 'ui_scale', 'state__analysis_splitter',
+                 'state__geometry', 'state__live_geometry', 'state__live_splitter',
+                 'state__overview_splitter', 'liveparser__auto_enabled', 'liveparser__columns',
+                 'liveparser__copy_kills', 'liveparser__graph_active', 'liveparser__graph_field',
                  'liveparser__player_display', 'liveparser__window_scale',
                  'liveparser__window_opacity')
 
@@ -55,6 +55,7 @@ class OSCRSettings():
         self.first_overview_tab: int = 0
         self.graph_resolution: float = 0.2
         self.heal_columns: list[bool] = [True] * 13
+        self.league_table_rows: int = 50
         self.language: str = 'en'
         self.log_path: str = ''
         self.overview_sort_column: int = 1
