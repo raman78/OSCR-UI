@@ -5,7 +5,6 @@ from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (
     QDialog, QFrame, QGridLayout, QLabel, QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
-from OSCR_django_client import CombatLogUploadV2Response
 from OSCR import DetectionInfo
 
 from .apiclient import UploadResult
