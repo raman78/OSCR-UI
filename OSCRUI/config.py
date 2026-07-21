@@ -3,6 +3,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSettings
 
+# Settings owned by the separate overlay process; the main process must not clobber
+# them on save (see OSCRSettings.store_settings_subset / reload_settings).
+OVERLAY_STATE_KEYS = (
+    'liveparser__overlay_left', 'liveparser__overlay_top',
+    'liveparser__overlay_width', 'liveparser__overlay_height')
+
 
 class OSCRConfig():
     def __init__(self):
@@ -43,7 +49,8 @@ class OSCRSettings():
                  'liveparser__copy_kills', 'liveparser__graph_active', 'liveparser__graph_field',
                  'liveparser__player_display', 'liveparser__window_scale',
                  'liveparser__window_opacity', 'liveparser__overlay_left',
-                 'liveparser__overlay_top')
+                 'liveparser__overlay_top', 'liveparser__overlay_width',
+                 'liveparser__overlay_height')
 
     def __init__(self, settings_file_path: Path):
         self.analysis_graph: bool = True
@@ -82,6 +89,9 @@ class OSCRSettings():
         # Wayland overlay position, as anchor (top|left) margins in pixels
         self.liveparser__overlay_left: int = 40
         self.liveparser__overlay_top: int = 40
+        # Wayland overlay size in pixels (0 = use the window's natural size)
+        self.liveparser__overlay_width: int = 0
+        self.liveparser__overlay_height: int = 0
 
         if os.name == 'nt':
             self._settings = QSettings(str(settings_file_path), QSettings.Format.IniFormat)
@@ -123,6 +133,29 @@ class OSCRSettings():
             if not setting.startswith('_'):
                 setting_id = setting.replace('__', '/')
                 self._settings.setValue(setting_id, getattr(self, setting))
+
+    def store_settings_subset(self, names):
+        """
+        Persists only the named settings to disk. Used by the overlay process so it can
+        save its position/size without rewriting (and clobbering) settings the main
+        process owns.
+        """
+        for name in names:
+            self._settings.setValue(name.replace('__', '/'), getattr(self, name))
+        self._settings.sync()
+
+    def reload_settings(self, names):
+        """
+        Re-reads the named settings from disk into memory, picking up values written by
+        another process (e.g. the overlay) so a subsequent store_settings does not
+        overwrite them with stale values.
+        """
+        self._settings.sync()
+        for name in names:
+            setting_id = name.replace('__', '/')
+            if self._settings.contains(setting_id):
+                item_type = type(getattr(self, name))
+                setattr(self, name, self._settings.value(setting_id, type=item_type))
 
     def set(self, setting_name: str, value):
         """

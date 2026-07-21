@@ -12,7 +12,7 @@ from PySide6.QtGui import (
 from OSCR import LIVE_TABLE_HEADER, TABLE_HEADER, TREE_HEADER, HEAL_TREE_HEADER
 from .analysisgraphs import AnalysisGraphs
 from .analysistables import AnalysisTables
-from .config import OSCRConfig, OSCRSettings
+from .config import OSCRConfig, OSCRSettings, OVERLAY_STATE_KEYS
 from .datamodels import SortingProxy, TreeModel, TreeSelectionModel
 from .dialogs import DetectionInfoDialog, DialogsWrapper, UploadresultDialog
 from .iofunctions import browse_path, get_asset_path, load_icon_series, load_icon
@@ -300,6 +300,9 @@ class OSCRUI():
         self.settings.state__geometry = self.window.saveGeometry()
         self.settings.state__overview_splitter = self.widgets.overview_splitter.saveState()
         self.settings.state__analysis_splitter = self.widgets.analysis_splitter.saveState()
+        # The overlay process may have updated its position/size; refresh those keys so
+        # this full save keeps them instead of writing our stale startup values.
+        self.settings.reload_settings(OVERLAY_STATE_KEYS)
         self.settings.store_settings()
         event.accept()
 

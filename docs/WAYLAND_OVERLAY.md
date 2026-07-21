@@ -29,9 +29,14 @@ Implemented and verified on branch `liveparser` (KDE Plasma Wayland / KWin).
   the system plugin dir and `QT_WAYLAND_SHELL_INTEGRATION=layer-shell` set before
   the QApplication.
 - **Invariants.** I1 satisfied (`keyboard-interactivity=none`, layer `overlay`).
-  I3 satisfied — the surface is dragged by updating anchor margins
-  (`live_parser_overlay_press/move`), persisted in settings
-  `liveparser__overlay_left/top`.
+  I3 satisfied — the surface is moved by updating anchor margins
+  (`live_parser_overlay_press/move`) and resized by resizing the widget directly
+  (`live_parser_overlay_resize_*`, since layer surfaces support neither
+  `startSystemMove` nor `startSystemResize`). Position and size are saved
+  debounced (~2.5 s after the last change) to `liveparser__overlay_{left,top,
+  width,height}`. Those keys are owned by the overlay process: it writes only
+  that subset (`store_settings_subset`) and the main process refreshes them
+  (`reload_settings`) before its own full save, so neither clobbers the other.
 - **I2 intentionally not applied.** Qt only exposes *whole-window* click-through
   (`Qt.WindowTransparentForInput` → empty `wl_surface.set_input_region`); a
   partial input region (interactive buttons, click-through elsewhere) is not
@@ -188,9 +193,10 @@ Mapping to the invariants:
    parity still unverified; `layershell_supported()` degrades gracefully (falls
    back to the plain toplevel) where the plugin or a matching Qt is absent.
 
-3. **Overlay position on forced termination.** When the main app terminates the
-   overlay process (SIGTERM), margins dragged during the session are not saved —
-   position only persists when the overlay is closed via its own Close button.
+3. **Overlay position on forced termination.** Position/size are now saved
+   debounced (~2.5 s after each change) and on the overlay's own Close button, so
+   they survive SIGTERM too — only a change made in the last <2.5 s before the
+   main app terminates the process is lost.
 
 ## References
 

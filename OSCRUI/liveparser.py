@@ -1,5 +1,5 @@
 from pyqtgraph import mkPen, PlotDataItem, PlotWidget
-from PySide6.QtCore import QPoint, Qt, Signal, Slot
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication, QGridLayout, QFrame, QHBoxLayout, QLabel, QSplitter, QTableView, QVBoxLayout)
@@ -8,7 +8,7 @@ from OSCR import LIVE_TABLE_HEADER, LiveParser
 
 from .datamodels import LiveParserTableModel
 from .dialogs import DialogsWrapper
-from .config import OSCRSettings
+from .config import OSCRSettings, OVERLAY_STATE_KEYS
 from .theme import AppTheme
 from .translation import tr
 from .widgetbuilder import (
@@ -55,6 +55,10 @@ class LiveParserWindow(QFrame):
         self._ls_window = None
         self._overlay_margins: list[int] = [0, 0]
         self._move_start_margins: tuple[int, int] = (0, 0)
+        self._resize_start_pos: QPoint = QPoint()
+        self._resize_start_size: QSize = QSize()
+        self._grip: SizeGrip
+        self._overlay_save_timer: QTimer
         self.build_window()
 
     @property
@@ -165,6 +169,7 @@ class LiveParserWindow(QFrame):
         grip = SizeGrip(self)
         grip.setStyleSheet(self._theme.get_style('resize_handle'))
         bottom_layout.addWidget(grip, 0, 4, alignment=ARIGHT | ABOTTOM)
+        self._grip = grip
 
         layout.addLayout(bottom_layout)
         self.setLayout(layout)
@@ -257,7 +262,8 @@ class LiveParserWindow(QFrame):
         """
         self._overlay_mode = True
         from .wayland_overlay import configure_as_overlay, layershell_supported
-        if layershell_supported():
+        overlay = layershell_supported()
+        if overlay:
             # The layer surface is created (and its config read) on show(); create the
             # native window now so it can be configured before that happens.
             self.create()
@@ -265,10 +271,22 @@ class LiveParserWindow(QFrame):
                 self._settings.liveparser__overlay_left, self._settings.liveparser__overlay_top]
             self._ls_window = configure_as_overlay(
                 self.windowHandle(), margins=(*self._overlay_margins, 0, 0))
-            # A layer surface cannot be moved like a toplevel (I3); drag by margins.
+            # A layer surface supports neither startSystemMove nor startSystemResize, so
+            # move by anchor margins and resize the widget manually.
             self.mousePressEvent = self.live_parser_overlay_press
             self.mouseMoveEvent = self.live_parser_overlay_move
+            self._grip.mousePressEvent = self.live_parser_overlay_resize_press
+            self._grip.mouseMoveEvent = self.live_parser_overlay_resize_move
+            # Debounced persistence: save position/size ~2.5 s after the last change.
+            self._overlay_save_timer = QTimer(self)
+            self._overlay_save_timer.setSingleShot(True)
+            self._overlay_save_timer.timeout.connect(self.save_overlay_state)
         self.toggle_window(True)
+        if overlay:
+            width = self._settings.liveparser__overlay_width
+            height = self._settings.liveparser__overlay_height
+            if width > 0 and height > 0:
+                self.resize(width, height)
 
     def toggle_window(self, activate: bool):
         """
@@ -318,8 +336,9 @@ class LiveParserWindow(QFrame):
             if self._overlay_mode:
                 if self._activate_button.isChecked():
                     self._liveparser.stop()
-                # The overlay runs in its own process, so it must persist settings itself.
-                self._settings.store_settings()
+                # The overlay runs in its own process; persist only its own keys so it
+                # does not clobber settings owned by the main process.
+                self._settings.store_settings_subset(OVERLAY_STATE_KEYS)
                 QApplication.quit()
                 return
             self.hide()
@@ -404,7 +423,40 @@ class LiveParserWindow(QFrame):
         top = max(0, self._move_start_margins[1] + delta.y())
         self._overlay_margins = [left, top]
         set_margins(self._ls_window, left, top)
+        self._overlay_save_timer.start(2500)
         event.accept()
+
+    def live_parser_overlay_resize_press(self, event: QMouseEvent):
+        """
+        Records the resize origin for the overlay's size grip.
+        """
+        self._resize_start_pos = event.globalPosition().toPoint()
+        self._resize_start_size = self.size()
+        event.accept()
+
+    def live_parser_overlay_resize_move(self, event: QMouseEvent):
+        """
+        Resizes the overlay live by resizing the widget directly (a layer surface does
+        not support startSystemResize). Anchored top|left, so the grip grows the surface
+        towards the bottom-right.
+        """
+        delta = event.globalPosition().toPoint() - self._resize_start_pos
+        width = max(self.minimumWidth(), self._resize_start_size.width() + delta.x())
+        height = max(self.minimumHeight(), self._resize_start_size.height() + delta.y())
+        self.resize(width, height)
+        self._overlay_save_timer.start(2500)
+        event.accept()
+
+    def save_overlay_state(self):
+        """
+        Persists overlay position and size (called debounced ~2.5 s after the last move
+        or resize) so the overlay reopens where and how the user left it.
+        """
+        self._settings.liveparser__overlay_left = self._overlay_margins[0]
+        self._settings.liveparser__overlay_top = self._overlay_margins[1]
+        self._settings.liveparser__overlay_width = self.width()
+        self._settings.liveparser__overlay_height = self.height()
+        self._settings.store_settings_subset(OVERLAY_STATE_KEYS)
 
     def store_window_state(self):
         """
@@ -416,6 +468,8 @@ class LiveParserWindow(QFrame):
         if self._overlay_mode:
             self._settings.liveparser__overlay_left = self._overlay_margins[0]
             self._settings.liveparser__overlay_top = self._overlay_margins[1]
+            self._settings.liveparser__overlay_width = self.width()
+            self._settings.liveparser__overlay_height = self.height()
 
     def copy_live_data_callback(self):
         """
