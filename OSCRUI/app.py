@@ -262,6 +262,16 @@ class OSCRUI():
         if activate:
             if self._overlay_process is not None:
                 return
+            if not os.path.isfile(self.settings.sto_log_path):
+                # Validate here so the warning renders as a normal dialog; inside the
+                # overlay process the layer-shell integration would blow it up fullscreen.
+                self.dialogs.show_message(
+                    tr('Invalid Logfile'),
+                    tr('Make sure to set the STO Logfile setting in the settings tab to a '
+                       'valid logfile before starting the live parser.'),
+                    'warning')
+                self.widgets.live_parser_button.setChecked(False)
+                return
             process = QProcess(self.window)
             process.finished.connect(self._on_overlay_finished)
             program, arguments = self._overlay_command()
