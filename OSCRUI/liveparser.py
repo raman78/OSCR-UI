@@ -423,6 +423,9 @@ class LiveParserWindow(QFrame):
         top = max(0, self._move_start_margins[1] + delta.y())
         self._overlay_margins = [left, top]
         set_margins(self._ls_window, left, top)
+        # A margin change only takes effect on the next wl_surface commit; without this
+        # the window jumps to the new spot seconds later, on the next natural frame.
+        self.windowHandle().requestUpdate()
         self._overlay_save_timer.start(2500)
         event.accept()
 
