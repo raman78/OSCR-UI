@@ -5,7 +5,7 @@ import sys
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLayout, QLineEdit, QFrame, QHeaderView, QScrollArea, QSplitter,
     QTabWidget, QTableView, QTreeView, QVBoxLayout, QHBoxLayout, QGridLayout)
-from PySide6.QtCore import QDir, QSize, QTimer, QThread
+from PySide6.QtCore import QDir, QProcess, QSize, QTimer, QThread
 from PySide6.QtGui import (
     QCloseEvent, QFontDatabase, QIntValidator, QKeySequence, QResizeEvent, QShortcut)
 
@@ -24,6 +24,7 @@ from .statusbar import StatusBar
 from .textedit import format_path
 from .theme import AppTheme
 from .translation import init_translation, tr
+from . import wayland_overlay
 from .widgetbuilder import (
     ABOTTOM, ACENTER, AHCENTER, ALEFT, ARIGHT, ATOP, AVCENTER, OVERTICAL, SMAXMAX, SMAXMIN,
     SMINMAX, SMINMIN, SMIXMAX, SCROLLOFF, SCROLLON,
@@ -39,7 +40,8 @@ from .widgets import AnalysisPlot, BannerLabel, FlipButton
 
 class OSCRUI():
 
-    def __init__(self, args, app_dir_path: str, version: str) -> None:
+    def __init__(
+            self, args, app_dir_path: str, version: str, overlay_mode: bool = False) -> None:
         """
         Creates new Instance of OSCR.
 
@@ -48,10 +50,17 @@ class OSCRUI():
             - `args.config_dir`: contains override for config dir, `str` or `None`
         - :param app_dir_path: absolute path to install directory
         - :param version: version of the app
+        - :param overlay_mode: when True, only the live parser is built and shown as a
+            standalone Wayland layer-shell overlay; the main window is not shown
         """
         self.version: str = version
         self.args = args
+        self.overlay_mode: bool = overlay_mode
         self.app_dir: str = app_dir_path
+        # When layer-shell is available, the live parser runs in a separate overlay
+        # process (see toggle_live_overlay); otherwise it toggles in-process.
+        self._use_overlay_process: bool = not overlay_mode and wayland_overlay.layershell_supported()
+        self._overlay_process = None
 
         # Setting up app base
         self.config: OSCRConfig = OSCRConfig()
@@ -78,6 +87,11 @@ class OSCRUI():
         self.status_bar: StatusBar = StatusBar(self.theme, self.window)
         self.live_parser: LiveParserWindow = LiveParserWindow(
             self.settings, self.theme, self.dialogs, self.widgets)
+        if self.overlay_mode:
+            # Standalone overlay process: skip the main window and its modules,
+            # show only the live parser as a layer-shell surface.
+            self.live_parser.start_overlay()
+            return
         self.parser: ParserBridge = ParserBridge(
             self.settings, self.config, self.widgets, self.dialogs)
         self.parser._tables = self.tables
@@ -228,10 +242,49 @@ class OSCRUI():
         return int(
             self.theme.opt.sidebar_item_width * self.window.width() * self.config.ui_scale)
 
+    def _overlay_command(self) -> tuple[str, list[str]]:
+        """
+        Returns (program, arguments) that launch this app in live-overlay mode,
+        pointing it at the same config directory. Works both frozen (PyInstaller)
+        and from source.
+        """
+        args = ['--live-overlay', '--config_dir', str(self.config.config_dir)]
+        if getattr(sys, 'frozen', False):
+            return sys.executable, args
+        return sys.executable, [os.path.join(self.app_dir, 'main.py'), *args]
+
+    def toggle_live_overlay(self, activate: bool):
+        """
+        Starts / stops the live parser overlay as a separate process. Used instead of
+        the in-process window when layer-shell is available, so the main window can stay
+        a normal toplevel while the overlay is a layer-shell surface.
+        """
+        if activate:
+            if self._overlay_process is not None:
+                return
+            process = QProcess(self.window)
+            process.finished.connect(self._on_overlay_finished)
+            program, arguments = self._overlay_command()
+            process.start(program, arguments)
+            self._overlay_process = process
+        elif self._overlay_process is not None:
+            self._overlay_process.terminate()
+
+    def _on_overlay_finished(self, *_):
+        """
+        Resets overlay state when the overlay process exits (whether closed from the
+        overlay window itself or terminated by us), un-checking the toggle button.
+        """
+        self._overlay_process = None
+        self.widgets.live_parser_button.setChecked(False)
+
     def main_window_close_callback(self, event: QCloseEvent):
         """
         Executed when application is closed.
         """
+        if self._overlay_process is not None:
+            self._overlay_process.terminate()
+            self._overlay_process.waitForFinished(2000)
         if self.live_parser.isVisible():
             self.live_parser.toggle_window(False)
         self.settings.state__geometry = self.window.saveGeometry()
@@ -774,7 +827,10 @@ class OSCRUI():
         live_parser_button = create_icon_button(
             self.theme, 'live-parser', tr('Live Parser'), 'live_icon_button', icon_size=size)
         live_parser_button.setCheckable(True)
-        live_parser_button.clicked[bool].connect(self.live_parser.toggle_window)
+        if self._use_overlay_process:
+            live_parser_button.clicked[bool].connect(self.toggle_live_overlay)
+        else:
+            live_parser_button.clicked[bool].connect(self.live_parser.toggle_window)
         menu_layout.addWidget(live_parser_button, 0, 2)
         self.widgets.live_parser_button = live_parser_button
         menu_frame.setLayout(menu_layout)

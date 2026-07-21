@@ -42,7 +42,8 @@ class OSCRSettings():
                  'state__overview_splitter', 'liveparser__auto_enabled', 'liveparser__columns',
                  'liveparser__copy_kills', 'liveparser__graph_active', 'liveparser__graph_field',
                  'liveparser__player_display', 'liveparser__window_scale',
-                 'liveparser__window_opacity')
+                 'liveparser__window_opacity', 'liveparser__overlay_left',
+                 'liveparser__overlay_top')
 
     def __init__(self, settings_file_path: Path):
         self.analysis_graph: bool = True
@@ -78,6 +79,9 @@ class OSCRSettings():
         self.liveparser__player_display: str = 'Handle'
         self.liveparser__window_scale: float = 1.0
         self.liveparser__window_opacity: float = 0.85
+        # Wayland overlay position, as anchor (top|left) margins in pixels
+        self.liveparser__overlay_left: int = 40
+        self.liveparser__overlay_top: int = 40
 
         if os.name == 'nt':
             self._settings = QSettings(str(settings_file_path), QSettings.Format.IniFormat)

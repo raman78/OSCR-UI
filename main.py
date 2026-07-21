@@ -29,9 +29,20 @@ class Launcher():
         argparser.add_argument(
             '--config_dir', type=str, required=False,
             help='Change configuration directory (must be readable and writable)')
+        argparser.add_argument(
+            '--live-overlay', action='store_true',
+            help='Internal: run only the live parser as a Wayland layer-shell overlay')
         args, _ = argparser.parse_known_args()
+        if args.live_overlay:
+            # Selecting the layer-shell shell integration is process-global, so it
+            # only happens in this dedicated overlay process and must precede the
+            # QApplication created inside OSCRUI.
+            from OSCRUI.wayland_overlay import layershell_supported, prepare_environment
+            if layershell_supported():
+                prepare_environment()
         exit_code = OSCRUI(
-            args=args, app_dir_path=Launcher.base_path(), version=Launcher.__version__).run()
+            args=args, app_dir_path=Launcher.base_path(), version=Launcher.__version__,
+            overlay_mode=args.live_overlay).run()
         sys.exit(exit_code)
 
 

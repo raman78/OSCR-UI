@@ -51,6 +51,10 @@ class LiveParserWindow(QFrame):
         self._graph_active: bool = False
         self._graph_data_buffer: list[list[int | float]] = list()
         self._graph_column: int = 0
+        self._overlay_mode: bool = False
+        self._ls_window = None
+        self._overlay_margins: list[int] = [0, 0]
+        self._move_start_margins: tuple[int, int] = (0, 0)
         self.build_window()
 
     @property
@@ -244,6 +248,28 @@ class LiveParserWindow(QFrame):
             self.update_table.emit(cells)
         self._duration_label.setText(f'Duration: {combat_time:.1f}s')
 
+    def start_overlay(self):
+        """
+        Enters overlay mode (used only in the standalone overlay process): turns this
+        window into a Wayland layer-shell surface pinned to the overlay layer without
+        taking keyboard focus, then activates it as if the live parser button had been
+        pressed. Falls back to a plain window when layer-shell is unavailable.
+        """
+        self._overlay_mode = True
+        from .wayland_overlay import configure_as_overlay, layershell_supported
+        if layershell_supported():
+            # The layer surface is created (and its config read) on show(); create the
+            # native window now so it can be configured before that happens.
+            self.create()
+            self._overlay_margins = [
+                self._settings.liveparser__overlay_left, self._settings.liveparser__overlay_top]
+            self._ls_window = configure_as_overlay(
+                self.windowHandle(), margins=(*self._overlay_margins, 0, 0))
+            # A layer surface cannot be moved like a toplevel (I3); drag by margins.
+            self.mousePressEvent = self.live_parser_overlay_press
+            self.mouseMoveEvent = self.live_parser_overlay_move
+        self.toggle_window(True)
+
     def toggle_window(self, activate: bool):
         """
         Activates / Deactivates LiveParser.
@@ -258,7 +284,8 @@ class LiveParserWindow(QFrame):
                     'Make sure to set the STO Logfile setting in the settings tab to a valid '
                     'logfile before starting the live parser.')
                 self._dialogs.show_message(tr('Invalid Logfile'), bad_logfile_message, 'warning')
-                self._widgets.live_parser_button.setChecked(False)
+                if not self._overlay_mode:
+                    self._widgets.live_parser_button.setChecked(False)
                 return
             if self._window_scale != self._settings.liveparser__window_scale:
                 QFrame().setLayout(self.layout())
@@ -288,6 +315,13 @@ class LiveParserWindow(QFrame):
             self.show()
         else:
             self.store_window_state()
+            if self._overlay_mode:
+                if self._activate_button.isChecked():
+                    self._liveparser.stop()
+                # The overlay runs in its own process, so it must persist settings itself.
+                self._settings.store_settings()
+                QApplication.quit()
+                return
             self.hide()
             if self._activate_button.isChecked():
                 self._activate_button.flip()
@@ -350,6 +384,28 @@ class LiveParserWindow(QFrame):
         self.windowHandle().startSystemMove()
         event.accept()
 
+    def live_parser_overlay_press(self, event: QMouseEvent):
+        """
+        Records the drag origin for margin-based movement of the layer-shell overlay.
+        """
+        self._move_start_pos = event.globalPosition().toPoint()
+        self._move_start_margins = (self._overlay_margins[0], self._overlay_margins[1])
+        event.accept()
+
+    def live_parser_overlay_move(self, event: QMouseEvent):
+        """
+        Moves the layer-shell overlay by updating its anchor margins (a layer surface
+        cannot be moved like a toplevel). Anchored top|left, so the left/top margins are
+        the on-screen x/y offset.
+        """
+        from .wayland_overlay import set_margins
+        delta = event.globalPosition().toPoint() - self._move_start_pos
+        left = max(0, self._move_start_margins[0] + delta.x())
+        top = max(0, self._move_start_margins[1] + delta.y())
+        self._overlay_margins = [left, top]
+        set_margins(self._ls_window, left, top)
+        event.accept()
+
     def store_window_state(self):
         """
         Stores state of window
@@ -357,6 +413,9 @@ class LiveParserWindow(QFrame):
         self._settings.state__live_geometry = self.saveGeometry()
         if self._graph_active:
             self._settings.state__live_splitter = self._splitter.saveState()
+        if self._overlay_mode:
+            self._settings.liveparser__overlay_left = self._overlay_margins[0]
+            self._settings.liveparser__overlay_top = self._overlay_margins[1]
 
     def copy_live_data_callback(self):
         """
