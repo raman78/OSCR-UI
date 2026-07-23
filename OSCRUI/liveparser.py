@@ -274,9 +274,8 @@ class LiveParserWindow(QFrame):
             self._ls_window = configure_as_overlay(
                 self.windowHandle(), margins=(*self._overlay_margins, 0, 0))
             # A layer surface supports neither startSystemMove nor startSystemResize, so
-            # move by margins and resize the widget manually. Movement is driven by raw
-            # relative-pointer deltas (immune to the surface moving under the cursor); if
-            # that is unavailable, fall back to the flaky surface-local delta handler.
+            # resize the widget manually and drive movement from raw relative-pointer
+            # deltas (immune to the surface moving under the cursor).
             self._rel_pointer = create_relative_pointer(self.overlay_relative_motion)
             if self._rel_pointer is not None:
                 # Raw relative-pointer deltas drive the drag — immune to the surface
