@@ -19,6 +19,7 @@ The portable fix is the `wlr-layer-shell` protocol, exposed to Qt by the
 """
 import ctypes
 import os
+import sys
 
 from PySide6.QtCore import QMargins, qVersion
 from PySide6.QtGui import QWindow
@@ -29,10 +30,28 @@ LAYER_BACKGROUND, LAYER_BOTTOM, LAYER_TOP, LAYER_OVERLAY = 0, 1, 2, 3
 ANCHOR_NONE, ANCHOR_TOP, ANCHOR_BOTTOM, ANCHOR_LEFT, ANCHOR_RIGHT = 0, 1, 2, 4, 8
 KEYBOARD_NONE, KEYBOARD_EXCLUSIVE, KEYBOARD_ON_DEMAND = 0, 1, 2
 
-SYSTEM_QT_PLUGIN_PATH = '/usr/lib/qt6/plugins'
+
+def _frozen_root() -> str | None:
+    """PyInstaller bundle directory when frozen, else None."""
+    if getattr(sys, 'frozen', False):
+        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    return None
+
+
+# When frozen we ship a layer-shell plugin built against the exact Qt PySide6
+# bundles, plus libLayerShellQtInterface, so no system layer-shell-qt is needed
+# and the Qt version always matches. Otherwise fall back to the system install.
+_FROZEN_ROOT = _frozen_root()
+if _FROZEN_ROOT:
+    QT_LAYER_SHELL_PLUGIN_PATH = os.path.join(_FROZEN_ROOT, 'layershellqt')
+    # Kept at the bundle root (on the loader path) so the plugin's SONAME
+    # dependency on it resolves when Qt dlopens liblayer-shell.so.
+    _INTERFACE_LIB = os.path.join(_FROZEN_ROOT, 'libLayerShellQtInterface.so.6')
+else:
+    QT_LAYER_SHELL_PLUGIN_PATH = '/usr/lib/qt6/plugins'
+    _INTERFACE_LIB = 'libLayerShellQtInterface.so.6'
 _LAYER_SHELL_PLUGIN = os.path.join(
-    SYSTEM_QT_PLUGIN_PATH, 'wayland-shell-integration', 'liblayer-shell.so')
-_INTERFACE_LIB = 'libLayerShellQtInterface.so.6'
+    QT_LAYER_SHELL_PLUGIN_PATH, 'wayland-shell-integration', 'liblayer-shell.so')
 _SYSTEM_QT_CORE = '/usr/lib/libQt6Core.so.6'
 
 # Mangled symbols exported by libLayerShellQtInterface.so.6 (Itanium C++ ABI)
@@ -52,8 +71,8 @@ def prepare_environment():
     dedicated overlay process.
     """
     existing = [p for p in os.environ.get('QT_PLUGIN_PATH', '').split(os.pathsep) if p]
-    if SYSTEM_QT_PLUGIN_PATH not in existing:
-        existing.append(SYSTEM_QT_PLUGIN_PATH)
+    if QT_LAYER_SHELL_PLUGIN_PATH not in existing:
+        existing.append(QT_LAYER_SHELL_PLUGIN_PATH)
     os.environ['QT_PLUGIN_PATH'] = os.pathsep.join(existing)
     os.environ['QT_WAYLAND_SHELL_INTEGRATION'] = 'layer-shell'
 
@@ -83,6 +102,10 @@ def layershell_supported() -> bool:
         return False
     if not os.path.isfile(_LAYER_SHELL_PLUGIN):
         return False
+    # Frozen bundles ship a plugin built against the exact bundled Qt, so the
+    # version always matches; only the system fallback needs the ABI check.
+    if _FROZEN_ROOT:
+        return True
     system = _system_qt_version().split('.')
     bundled = qVersion().split('.')
     return system[:2] == bundled[:2] and len(system) >= 2
