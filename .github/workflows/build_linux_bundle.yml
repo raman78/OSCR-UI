@@ -1,0 +1,64 @@
+name: Build Linux bundle
+
+# Builds the self-contained Linux one-dir app (PyInstaller) with the Wayland
+# overlay bundled in, and attaches it to the release as a downloadable tarball.
+#
+# The bundled layer-shell Qt plugin must match the Qt version PySide6 ships, so
+# the job runs in an Arch container (rolling Qt) and fails fast if the two
+# diverge (rather than shipping a broken overlay). When that happens, bump the
+# pinned PySide6 to the Qt minor Arch now provides and re-run.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the build to (e.g. v11.2.1)"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git base-devel python python-pip \
+            wayland layer-shell-qt qt6-wayland github-cli tar
+
+      - uses: actions/checkout@v4
+
+      - name: Verify system Qt matches the pinned PySide6 Qt (fail fast)
+        run: |
+          system=$(basename "$(readlink -f /usr/lib/libQt6Core.so.6)" | sed 's/^libQt6Core.so.//')
+          pinned=$(grep -oP 'PySide6==\K[0-9.]+' pyproject.toml)
+          echo "system Qt: $system | pinned PySide6: $pinned"
+          if [ "${system%.*}" != "${pinned%.*}" ]; then
+            echo "::error::System Qt ($system) and pinned PySide6 ($pinned) differ on major.minor;"
+            echo "::error::the bundled layer-shell plugin would be ABI-incompatible. Bump PySide6."
+            exit 1
+          fi
+
+      - name: Build the one-dir app
+        run: sh distribution/build_pyinstaller.sh
+
+      - name: Package tarball
+        id: pack
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          name="OSCR-UI-${tag}-linux-x86_64.tar.gz"
+          tar czf "$name" -C dist OSCR-UI
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.pack.outputs.tag }}" \
+            "${{ steps.pack.outputs.name }}" \
+            --clobber --repo "${{ github.repository }}"
