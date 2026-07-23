@@ -94,7 +94,7 @@ class OSCRLeftSidebar():
         if path is not None:
             self.log_path_widget.setText(str(path))
             if self._settings.auto_scan:
-                self._parser.analyze_log_file(str(path))
+                self._parser.analyze_log_file(path)
 
     def setup_left_sidebar_log(self, parent_frame: QFrame):
         """
