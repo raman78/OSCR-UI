@@ -29,14 +29,28 @@ Implemented and verified on branch `liveparser` (KDE Plasma Wayland / KWin).
   the system plugin dir and `QT_WAYLAND_SHELL_INTEGRATION=layer-shell` set before
   the QApplication.
 - **Invariants.** I1 satisfied (`keyboard-interactivity=none`, layer `overlay`).
-  I3 satisfied — the surface is moved by updating anchor margins
-  (`live_parser_overlay_press/move`) and resized by resizing the widget directly
-  (`live_parser_overlay_resize_*`, since layer surfaces support neither
-  `startSystemMove` nor `startSystemResize`). Position and size are saved
-  debounced (~2.5 s after the last change) to `liveparser__overlay_{left,top,
-  width,height}`. Those keys are owned by the overlay process: it writes only
-  that subset (`store_settings_subset`) and the main process refreshes them
-  (`reload_settings`) before its own full save, so neither clobbers the other.
+  I3 satisfied — the surface is moved by updating anchor margins and resized by
+  resizing the widget directly (`live_parser_overlay_resize_*`, since layer
+  surfaces support neither `startSystemMove` nor `startSystemResize`). Position
+  and size are saved debounced (~2.5 s after the last change) to
+  `liveparser__overlay_{left,top,width,height}`. Those keys are owned by the
+  overlay process: it writes only that subset (`store_settings_subset`) and the
+  main process refreshes them (`reload_settings`) before its own full save, so
+  neither clobbers the other.
+- **Dragging uses raw relative-pointer motion.** A margin drag driven by
+  `event.position()` fails: when we move the surface, Qt's surface-local
+  coordinate frame shifts under the pointer (inconsistently — sometimes it
+  re-references our move, sometimes not), so the window drifts, jitters, or
+  flings to a corner. No `event.position()` formula is stable. The fix is the
+  same one CLA's overlay reached: derive motion from `zwp_relative_pointer_v1`
+  raw deltas, which our own moves never perturb. Qt does not expose it, so
+  `wayland_overlay.create_relative_pointer` binds it via **pywayland** onto the
+  `wl_display` that `QNativeInterface::QWaylandApplication` hands us as a raw
+  pointer; events are delivered by Qt's normal dispatch. pywayland has no wheels
+  and builds from source, so it is an optional extra (`OSCR-UI[wayland]`);
+  without it the overlay shows but is not draggable. `overlay_relative_motion`
+  accumulates the deltas sub-pixel and applies whole-pixel margin steps while
+  `live_parser_overlay_press`/`_release` gate a drag.
 - **I2 intentionally not applied.** Qt only exposes *whole-window* click-through
   (`Qt.WindowTransparentForInput` → empty `wl_surface.set_input_region`); a
   partial input region (interactive buttons, click-through elsewhere) is not

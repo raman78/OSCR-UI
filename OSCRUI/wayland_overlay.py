@@ -159,3 +159,71 @@ def set_margins(ls_window, left: int, top: int, right: int = 0, bottom: int = 0)
     """
     qm = QMargins(left, top, right, bottom)
     _library()[_SYM_SET_MARGINS](ls_window, _cpp_ptr(qm))
+
+
+def create_relative_pointer(on_motion):
+    """
+    Set up a Wayland relative-pointer on Qt's own wl_display so drags get raw
+    pointer deltas that are independent of the surface position.
+
+    A layer surface cannot be dragged by the compositor, so the overlay moves
+    itself by margins. Deriving the motion from `event.position()` fails: when we
+    move the surface, Qt's surface-local coordinate frame shifts under the pointer
+    (inconsistently), so the window drifts/jitters/flings. The `zwp_relative_pointer_v1`
+    protocol reports raw motion deltas that our own moves never perturb — the same
+    fix CLA's overlay uses. Qt does not expose it, so we bind it via pywayland onto
+    the wl_display that `QNativeInterface::QWaylandApplication` hands us (as a raw
+    pointer); events are delivered by Qt's normal event-loop dispatch.
+
+    Parameters:
+    - :param on_motion: callback invoked as on_motion(dx, dy) with float deltas for
+      each relative motion event
+
+    :return: an opaque holder whose references must be kept alive for events to keep
+      arriving, or None when unavailable (no pywayland, or the compositor lacks the
+      protocol) — callers should then fall back to a plain move handler
+    """
+    try:
+        from pywayland import ffi
+        from pywayland.client import Display
+        from pywayland.protocol.wayland import WlSeat
+        from pywayland.protocol.relative_pointer_unstable_v1 import (
+            ZwpRelativePointerManagerV1)
+    except Exception:
+        return None
+    from PySide6.QtGui import QGuiApplication
+
+    native = QGuiApplication.instance().nativeInterface()
+    try:
+        display_ptr = native.display()
+    except Exception:
+        return None
+    if not display_ptr:
+        return None
+
+    display = Display()
+    display._ptr = ffi.cast('struct wl_display *', display_ptr)  # borrow Qt's, do not gc
+    registry = display.get_registry()
+    bound = {}
+
+    def on_global(reg, name, interface, version):
+        if interface == 'wl_seat' and 'seat' not in bound:
+            bound['seat'] = reg.bind(name, WlSeat, min(version, 5))
+        elif interface == 'zwp_relative_pointer_manager_v1':
+            bound['manager'] = reg.bind(name, ZwpRelativePointerManagerV1, version)
+
+    registry.dispatcher['global'] = on_global
+    display.roundtrip()
+    if 'seat' not in bound or 'manager' not in bound:
+        return None
+
+    pointer = bound['seat'].get_pointer()
+    relative = bound['manager'].get_relative_pointer(pointer)
+
+    def _on_relative_motion(rel, utime_hi, utime_lo, dx, dy, dx_unaccel, dy_unaccel):
+        on_motion(dx, dy)
+
+    relative.dispatcher['relative_motion'] = _on_relative_motion
+    display.roundtrip()
+    return {'display': display, 'registry': registry, 'pointer': pointer,
+            'relative': relative, **bound}

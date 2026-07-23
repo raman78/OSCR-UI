@@ -28,6 +28,12 @@ dynamic = ["version"]
 pyinst = [
     "pyinstaller==6.21.0"
 ]
+# Enables dragging the live parser overlay on Wayland (raw relative-pointer motion).
+# Linux/Wayland only and builds from source (needs libwayland + wayland-scanner), so
+# it is optional; without it the overlay still shows, just cannot be dragged.
+wayland = [
+    "pywayland==0.4.18"
+]
 
 [project.urls]
 Homepage = "https://github.com/STOCD/OSCR-UI"

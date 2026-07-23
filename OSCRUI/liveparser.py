@@ -54,7 +54,9 @@ class LiveParserWindow(QFrame):
         self._overlay_mode: bool = False
         self._ls_window = None
         self._overlay_margins: list[int] = [0, 0]
-        self._move_start_margins: tuple[int, int] = (0, 0)
+        self._dragging: bool = False
+        self._drag_accum: list[float] = [0.0, 0.0]
+        self._rel_pointer = None
         self._resize_start_pos: QPoint = QPoint()
         self._resize_start_size: QSize = QSize()
         self._grip: SizeGrip
@@ -261,7 +263,7 @@ class LiveParserWindow(QFrame):
         pressed. Falls back to a plain window when layer-shell is unavailable.
         """
         self._overlay_mode = True
-        from .wayland_overlay import configure_as_overlay, layershell_supported
+        from .wayland_overlay import configure_as_overlay, create_relative_pointer, layershell_supported
         overlay = layershell_supported()
         if overlay:
             # The layer surface is created (and its config read) on show(); create the
@@ -272,9 +274,15 @@ class LiveParserWindow(QFrame):
             self._ls_window = configure_as_overlay(
                 self.windowHandle(), margins=(*self._overlay_margins, 0, 0))
             # A layer surface supports neither startSystemMove nor startSystemResize, so
-            # move by anchor margins and resize the widget manually.
-            self.mousePressEvent = self.live_parser_overlay_press
-            self.mouseMoveEvent = self.live_parser_overlay_move
+            # move by margins and resize the widget manually. Movement is driven by raw
+            # relative-pointer deltas (immune to the surface moving under the cursor); if
+            # that is unavailable, fall back to the flaky surface-local delta handler.
+            self._rel_pointer = create_relative_pointer(self.overlay_relative_motion)
+            if self._rel_pointer is not None:
+                # Raw relative-pointer deltas drive the drag — immune to the surface
+                # moving under the cursor. Without pywayland the window is not draggable.
+                self.mousePressEvent = self.live_parser_overlay_press
+                self.mouseReleaseEvent = self.live_parser_overlay_release
             self._grip.mousePressEvent = self.live_parser_overlay_resize_press
             self._grip.mouseMoveEvent = self.live_parser_overlay_resize_move
             # Debounced persistence: save position/size ~2.5 s after the last change.
@@ -405,29 +413,47 @@ class LiveParserWindow(QFrame):
 
     def live_parser_overlay_press(self, event: QMouseEvent):
         """
-        Records the drag origin for margin-based movement of the layer-shell overlay.
+        Arms dragging; the motion itself arrives via overlay_relative_motion.
         """
-        self._move_start_pos = event.globalPosition().toPoint()
-        self._move_start_margins = (self._overlay_margins[0], self._overlay_margins[1])
+        self._dragging = True
+        self._drag_accum = [0.0, 0.0]
         event.accept()
 
-    def live_parser_overlay_move(self, event: QMouseEvent):
+    def live_parser_overlay_release(self, event: QMouseEvent):
         """
-        Moves the layer-shell overlay by updating its anchor margins (a layer surface
-        cannot be moved like a toplevel). Anchored top|left, so the left/top margins are
-        the on-screen x/y offset.
+        Ends a relative-pointer drag and persists the new position immediately.
         """
+        self._dragging = False
+        self.save_overlay_state()
+        event.accept()
+
+    def overlay_relative_motion(self, dx: float, dy: float):
+        """
+        Moves the overlay by a raw relative-pointer delta while dragging. Deltas are
+        accumulated with sub-pixel precision and applied as whole pixels, anchored
+        top|left so the left/top margins are the on-screen x/y offset. Immune to the
+        surface moving under the cursor, so it tracks 1:1 without drift.
+        """
+        if not self._dragging:
+            return
         from .wayland_overlay import set_margins
-        delta = event.globalPosition().toPoint() - self._move_start_pos
-        left = max(0, self._move_start_margins[0] + delta.x())
-        top = max(0, self._move_start_margins[1] + delta.y())
-        self._overlay_margins = [left, top]
-        set_margins(self._ls_window, left, top)
-        # A margin change only takes effect on the next wl_surface commit; without this
-        # the window jumps to the new spot seconds later, on the next natural frame.
+        self._drag_accum[0] += dx
+        self._drag_accum[1] += dy
+        step_x = int(self._drag_accum[0])
+        step_y = int(self._drag_accum[1])
+        if step_x == 0 and step_y == 0:
+            return
+        self._drag_accum[0] -= step_x
+        self._drag_accum[1] -= step_y
+        screen = self.windowHandle().screen().geometry()
+        max_left = max(0, screen.width() - self.width())
+        max_top = max(0, screen.height() - self.height())
+        new_left = min(max(0, self._overlay_margins[0] + step_x), max_left)
+        new_top = min(max(0, self._overlay_margins[1] + step_y), max_top)
+        self._overlay_margins = [new_left, new_top]
+        set_margins(self._ls_window, new_left, new_top)
         self.windowHandle().requestUpdate()
         self._overlay_save_timer.start(2500)
-        event.accept()
 
     def live_parser_overlay_resize_press(self, event: QMouseEvent):
         """
